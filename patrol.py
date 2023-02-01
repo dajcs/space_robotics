@@ -1,106 +1,34 @@
-import rclpy
-from rclpy.node import Node
-
 '''
-subscribing to leo0x/firmware/imu
-
-leo package on foxy:
-sudo apt-get install ros-foxy-leo
-
-leo package on humble:
-sudo apt install ros-humble-leo-msgs
-
-ros2 topic list -> /leo06/firmware/imu
-
-ros2 topic echo /leo06/firmware/imu --> to monitor messages
-stamp:
-  sec: 1665149630
-  nanosec: 642894081
-temperature: 34.35990524291992
-gyro_x: -0.02250371128320694
-gyro_y: -0.00905474741011858
-gyro_z: -0.010918959975242615
-accel_x: -0.8978256583213806
-accel_y: 0.24420857429504395
-accel_z: 9.513360023498535
-
-
-ros2 topic info /leo06/firmware/imu
-Type: leo_msgs/msg/Imu
-Publisher count: 1
-Subscription count: 0
-
-ros2 interface show leo_msgs/msg/Imu
-# This message holds the data retrieved from an Accel/Gyro+Temp IMU sensor
+ros2 interface show leo_msgs/msg/WheelOdom
+# This message represents the pose and velocity of a differential wheeled robot, 
+# estimated from the wheel encoders.
 #
-# The temperature field represents the temperature reported by the sensor in Degrees Celcius
-# The gyro_* fields represent the rotational velocity in rad/s
-# The accel_* fields represent the linear acceleration in m/s^2
+# The velocity_* fields represent the linear and angular velocity of the robot.
+# The pose_* fields represent the x, y and yaw pose of the robot w.r.t. the starting pose.
+#
+# The coordinate frame that represents the robot is located at the center of rotation.
 
 builtin_interfaces/Time stamp
-	int32 sec
-	uint32 nanosec
-float32 temperature
-float32 gyro_x
-float32 gyro_y
-float32 gyro_z
-float32 accel_x
-float32 accel_y
-float32 accel_z
+float32 velocity_lin
+float32 velocity_ang
+float32 pose_x
+float32 pose_y
+float32 pose_yaw
 
+stamp:
+  sec: 1665152368
+  nanosec: 683160648
+velocity_lin: 0.0
+velocity_ang: 0.0
+pose_x: 0.1369149535894394
+pose_y: -0.00023565816809423268
+pose_yaw: 0.00815676711499691
 
-accel_x: 6  (set polygon)
-ros2 topic pub /leo06/firmware/imu leo_msgs/Imu "{stamp: {sec: 1, nanosec: 1}, temperature: 1, gyro_x: 0, gyro_y: 0, gyro_z: 0, accel_x: 6, accel_y: 0, accel_z: 10}" -r 10
-
-accel_y: 6  (set_speed)
-ros2 topic pub /leo06/firmware/imu leo_msgs/Imu "{stamp: {sec: 1, nanosec: 1}, temperature: 1, gyro_x: 0, gyro_y: 0, gyro_z: 0, accel_x: 0, accel_y: 6, accel_z: 10}" -r 10
-
-accel_z: -10 (ctrl-C)
-ros2 topic pub /leo06/firmware/imu leo_msgs/Imu "{stamp: {sec: 1, nanosec: 1}, temperature: 1, gyro_x: 0, gyro_y: 0, gyro_z: 0, accel_x: 0, accel_y: 0, accel_z: -10}" -r 10
-
-
+rate: 20 Hz
 '''
 
-'''
-publishing on leo0x/cmd_vel
-
-ros2 topic info /leo06/cmd_vel
-Type: geometry_msgs/msg/Twist
-Publisher count: 1
-Subscription count: 0
-
-ros2 interface show geometry_msgs/msg/Twist
-# This expresses velocity in free space broken into its linear and angular parts.
-
-Vector3  linear
-	float64 x
-	float64 y
-	float64 z
-Vector3  angular
-	float64 x
-	float64 y
-	float64 z
-
-    "leo01": "Earth leorover",
-    "leo05": "Mercury curiosity",
-    "leo06": "Venus perseverance",
-    "leo07": "Mars sojourner",
-    "leo08": "Jupiter lunokhod",
-    "leo09": "Saturn opportunity",
-    "leo10": "Pluto ingenuity"
-
-
-WheelOdom.get_fields_and_field_types()                                                                                                         
-
-{'stamp': 'builtin_interfaces/Time',
- 'velocity_lin': 'float',
- 'velocity_ang': 'float',
- 'pose_x': 'float',
- 'pose_y': 'float',
- 'pose_yaw': 'float'}
-
-
-'''
+import rclpy
+from rclpy.node import Node
 
 from leo_msgs.msg import Imu
 from leo_msgs.msg import WheelOdom
@@ -109,13 +37,6 @@ from math import pi
 from geometry_msgs.msg import Twist
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 
-LINEAR_SPEED = 0.2    # [m/s]
-RECTANGLE_X = 2       # [m]
-RECTANGLE_Y = 1       # [m]
-PRINT_PERIOD = 100    # print every 100th message 
-
-x_time = RECTANGLE_X / LINEAR_SPEED   # [s] 10
-y_time = RECTANGLE_Y / LINEAR_SPEED   # [s] 5
 
 MY_LEO = 'leo09'
 
@@ -130,15 +51,15 @@ class LeoRover(Node):
     def __init__(self):
         super().__init__('patrol')
 
-        self.imu_subscriber = self.create_subscription(
-            Imu,
-            f'/{MY_LEO}/firmware/imu',
-            self.imu_msg_callback,
-            qos_profile = qos_profile
-        )
+        # self.imu_subscriber = self.create_subscription(
+        #     Imu,
+        #     f'/{MY_LEO}/firmware/imu',
+        #     self.imu_msg_callback,
+        #     qos_profile = qos_profile
+        # )
         self.odometer_subscriber = self.create_subscription(
             WheelOdom,
-            f'/{MY_LEO}/firmware/odometer',                  # ???????? - TODO
+            f'/{MY_LEO}/firmware/wheel_odom',   
             self.odometer_msg_callback,
             qos_profile = qos_profile
         )
@@ -148,91 +69,66 @@ class LeoRover(Node):
         self.turtle_publisher = self.create_publisher(Twist, '/turtle1/cmd_vel', 1)   # monitoring cmd_vel on turtle_sim
 
         self.i = -1                        # counter
-        self.linear_speed = LINEAR_SPEED   # initial linear speed
 
 
-    def init_state(self, msg):
-            self.t0 = msg.stamp.sec + msg.stamp.nanosec * 1e-9
-            self.theta = 0
-            self.turn = False
-            self.rect_x = True
-            self.latitude_time = x_time
-            self.drive_time = 0
-
-            return
-
-
-    def print(self, msg):
-        self.get_logger().info(f'''
-        ---------------------------------------------------------------
-        stamp.sec, stamp.nanosec::  {msg.stamp.sec}.{msg.stamp.nanosec}
-        ---------------------------------------------------------------
-        accel_xyz: {round(msg.accel_x,2):5} {round(msg.accel_y,2):5} {round(msg.accel_z,2):5} 
-        gyro_xyz:  {round(msg.gyro_x,2):5} {round(msg.gyro_y,2):5} {round(msg.gyro_z,2):5} 
-
-        {self.operation}\n\n''')
 
 
     def odometer_msg_callback(self, msg):
-#        self.get_logger().info(msg)
-        pass
-
-    def imu_msg_callback(self, msg):
-        '''
-        receiving imu message below
-            stamp:
-                sec: 1665149630
-                nanosec: 642894081
-            temperature: 34.35990524291992
-            gyro_x: -0.02250371128320694
-            gyro_y: -0.00905474741011858
-            gyro_z: -0.010918959975242615
-            accel_x: -0.8978256583213806
-            accel_y: 0.24420857429504395
-            accel_z: 9.513360023498535
-        '''
-        self.i += 1 # step counter
-        if not self.i: # initialize state - couldn't be done in __init__ because we need timestamp for t0
-            self.init_state(msg)
+        if self.i % 10 == 0:
+            self.get_logger().info(f'''sec: {msg.stamp.sec}   nanosec: {msg.stamp.nanosec}
+            velocity_lin: {msg.velocity_lin}
+            velocity_ang: {msg.velocity_ang}
+            pose_x: {msg.pose_x}
+            pose_y: {msg.pose_y}
+            pose_yaw: {msg.pose_yaw}
+            ''')
+        self.i += 1
+        if self.i == 0:
+            self.x0 = msg.pose_x
+            self.y0 = msg.pose_y
+            self.yaw0 = msg.pose_yaw
+            self.latitude_X = True
+            self.turn = False
             return
-        else:
-            t = msg.stamp.sec + msg.stamp.nanosec * 1e-9
-            dt = t - self.t0
-            self.t0 = t
-
 
         cmd_vel = Twist()
 
-        if self.turn == False:                  # go ahead
-            cmd_vel.linear.x = self.linear_speed
-            self.leo_publisher.publish(cmd_vel)
-            self.turtle_publisher.publish(cmd_vel)   # can be observed on the turtlesim
-            cmd = f'Linear drive, speed = {self.linear_speed} m/s,  rectangle X latitude: {self.rect_x})'
-            self.drive_time += dt
-            if self.drive_time > self.latitude_time:    # linear.x driving time limited by latitude_time
-                self.drive_time = 0
-                self.turn = True
-        
-        else:                                   # turning time
+        if self.turn:     # turning
             cmd_vel.angular.z = 0.5
             self.leo_publisher.publish(cmd_vel)
-            cmd = 'Turn left (angular.z = 0.5)'
-            cmd_vel.angular.z = msg.gyro_z
-            self.turtle_publisher.publish(cmd_vel)     # following on turtle
-            d_theta = msg.gyro_z * dt
-            self.theta += d_theta
-            if self.theta > pi / 2:
-                self.theta = 0
+            self.turtle_publisher.publish(cmd_vel)
+            yaw0 = self.yaw0
+            yaw1 = msg.pose_yaw
+            theta = yaw1-yaw0 if yaw1-yaw0 > 0 else yaw1-yaw0 + 2*pi
+            print(f'{self.i} turning, yaw0: {yaw0}  yaw1: {yaw1} theta: {theta}\n')
+            if theta > pi/2:   # next phase
                 self.turn = False
-                self.rect_x = not self.rect_x      # alternating rect_x and rect_y
-                self.latitude_time = x_time if self.rect_x else y_time
-        
-        self.operation = f'''Executing: {cmd}
-        State: drive_time: {round(self.drive_time,2):5}    theta: {round(self.theta,2):5}'''
+                self.x0 = msg.pose_x
+                self.y0 = msg.pose_y
 
-        if PRINT_PERIOD:
-            if self.i % PRINT_PERIOD == 0:    # print only every PRINT_PERIOD time
-                self.print(msg)
+        else:               # linear driving
+            cmd_vel.linear.x = 0.5
+            self.leo_publisher.publish(cmd_vel)
+            self.turtle_publisher.publish(cmd_vel)
+            x0 = self.x0
+            y0 = self.y0
+            x1 = msg.pose_x
+            y1 = msg.pose_y
+            d = ((x1-x0)**2 + (y1-y0)**2)**0.5
+            limit = 0.5 + 0.5 * self.latitude_X
+            print(f'{self.i} driving, d: {d},  limit: {limit} \n')
+            if d > limit:
+                self.turn = True
+                self.yaw0 = msg.pose_yaw
+                self.latitude_X = not self.latitude_X
+
+
+
+
+    # def imu_msg_callback(self, msg):
+    #     self.get_logger().info(msg)
+    #     pass
+
 
 
 
